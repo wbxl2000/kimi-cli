@@ -1295,6 +1295,8 @@ class CustomPromptSession:
                 if not completion:
                     completion = buff.complete_state.completions[0]
                 buff.apply_completion(completion)
+                if SlashCommandCompleter.should_complete(buff.document):
+                    buff.validate_and_handle()
 
         @_kb.add("c-x", eager=True)
         def _(event: KeyPressEvent) -> None:
