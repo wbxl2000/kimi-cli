@@ -1295,8 +1295,23 @@ class CustomPromptSession:
                 if not completion:
                     completion = buff.complete_state.completions[0]
                 buff.apply_completion(completion)
-                if SlashCommandCompleter.should_complete(buff.document):
-                    buff.validate_and_handle()
+                # TODO: auto-submit slash commands that don't accept arguments
+                # Current `should_complete()` can't distinguish between no-arg
+                # commands (e.g. /yolo, /clear) and arg-accepting ones (e.g.
+                # /plan, /compact, /import). Submitting blindly breaks the
+                # latter — same issue that got PR #1509 closed.
+                # See: https://github.com/MoonshotAI/kimi-cli/issues/751
+                #
+                # Proposed fix: add an `auto_submit` flag to SlashCommand so
+                # each command can opt-in explicitly.
+                #
+                # Safe to auto-submit (no args / bare command is the main use):
+                #   /yolo /clear /new /help /version /web /vis /mcp /hooks
+                #   /changelog /feedback /model /sessions /task /undo /fork
+                #
+                # NOT safe (bare command toggles state, needs args, or errors):
+                #   /plan /compact /add-dir /import /export /title /theme
+                #   /editor /init  and all skill:* commands
 
         @_kb.add("c-x", eager=True)
         def _(event: KeyPressEvent) -> None:
