@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from collections.abc import Callable
@@ -8,6 +9,9 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from prompt_toolkit import PromptSession as PTKPromptSession
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 from kimi_cli.soul import StatusSnapshot
 from kimi_cli.ui.shell import prompt as shell_prompt
@@ -140,6 +144,7 @@ def test_build_toolbar_tips_without_clipboard() -> None:
         "shift-tab: plan mode",
         "ctrl-o: editor",
         "ctrl-j: newline",
+        "esc esc: undo last turn",
         "/feedback: send feedback",
         "/theme: switch dark/light",
         "@: mention files",
@@ -152,11 +157,38 @@ def test_build_toolbar_tips_with_clipboard() -> None:
         "shift-tab: plan mode",
         "ctrl-o: editor",
         "ctrl-j: newline",
+        "esc esc: undo last turn",
         "/feedback: send feedback",
         "/theme: switch dark/light",
         "ctrl-v: paste clipboard",
         "@: mention files",
     ]
+
+
+def _patch_prompt_session_io(monkeypatch: Any, pipe_input: Any) -> None:
+    class _PromptSessionFactory:
+        @classmethod
+        def __class_getitem__(cls, _item: object) -> type[_PromptSessionFactory]:
+            return cls
+
+        def __new__(cls, *args: Any, **kwargs: Any) -> PTKPromptSession[str]:
+            return PTKPromptSession(*args, input=pipe_input, output=DummyOutput(), **kwargs)
+
+    monkeypatch.setattr(shell_prompt, "PromptSession", _PromptSessionFactory)
+
+
+def _make_prompt_session(monkeypatch: Any, tmp_path: Any, pipe_input: Any) -> CustomPromptSession:
+    monkeypatch.setattr(shell_prompt, "get_share_dir", lambda: tmp_path)
+    monkeypatch.setattr(shell_prompt, "is_clipboard_available", lambda: False)
+    _patch_prompt_session_io(monkeypatch, pipe_input)
+    return CustomPromptSession(
+        status_provider=lambda: StatusSnapshot(context_usage=0.0),
+        model_capabilities=set(),
+        model_name=None,
+        thinking=False,
+        agent_mode_slash_commands=[],
+        shell_mode_slash_commands=[],
+    )
 
 
 # ── _display_width ─────────────────────────────────────────────────────────────
@@ -832,6 +864,53 @@ async def test_prompt_once_uses_prompt_delegate_placeholder_contract(running_pro
 
     assert result.command == "hello"
     assert captured == [None]
+
+
+@pytest.mark.asyncio
+async def test_prompt_next_keeps_escape_sequences_intact(monkeypatch: Any, tmp_path: Any) -> None:
+    with create_pipe_input() as pipe_input:
+        prompt_session = _make_prompt_session(monkeypatch, tmp_path, pipe_input)
+
+        async def _feed_input() -> None:
+            await asyncio.sleep(0.05)
+            pipe_input.send_text("abc")
+            pipe_input.send_bytes(b"\x1b")
+            await asyncio.sleep(0.15)
+            pipe_input.send_bytes(b"[D")
+            await asyncio.sleep(0.05)
+            pipe_input.send_text("X\r")
+
+        feeder = asyncio.create_task(_feed_input())
+        try:
+            result = await asyncio.wait_for(prompt_session.prompt_next(), timeout=2.0)
+        finally:
+            await feeder
+
+    assert result.command == "abXc"
+    assert result.resolved_command == "abXc"
+
+
+@pytest.mark.asyncio
+async def test_prompt_next_supports_double_escape_undo_shortcut(
+    monkeypatch: Any, tmp_path: Any
+) -> None:
+    with create_pipe_input() as pipe_input:
+        prompt_session = _make_prompt_session(monkeypatch, tmp_path, pipe_input)
+
+        async def _feed_input() -> None:
+            await asyncio.sleep(0.05)
+            pipe_input.send_bytes(b"\x1b")
+            await asyncio.sleep(0.05)
+            pipe_input.send_bytes(b"\x1b")
+
+        feeder = asyncio.create_task(_feed_input())
+        try:
+            result = await asyncio.wait_for(prompt_session.prompt_next(), timeout=2.0)
+        finally:
+            await feeder
+
+    assert result.command == "/undo"
+    assert result.resolved_command == "/undo"
 
 
 @pytest.mark.asyncio

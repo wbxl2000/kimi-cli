@@ -1147,6 +1147,7 @@ def _build_toolbar_tips(clipboard_available: bool) -> list[str]:
         "shift-tab: plan mode",
         "ctrl-o: editor",
         "ctrl-j: newline",
+        "esc esc: undo last turn",
         "/feedback: send feedback",
         "/theme: switch dark/light",
     ]
@@ -1275,6 +1276,20 @@ class CustomPromptSession:
         def _(event: KeyPressEvent) -> None:
             """Insert a newline when Alt-Enter or Ctrl-J is pressed."""
             event.current_buffer.insert_text("\n")
+
+        @_kb.add(
+            "escape",
+            "escape",
+            eager=True,
+            filter=Condition(lambda: self._active_prompt_delegate() is None),
+        )
+        def _(event: KeyPressEvent) -> None:
+            """Esc Esc: trigger /undo to revert to a previous turn."""
+            buff = event.current_buffer
+            if buff.text.strip():
+                return
+            buff.set_document(Document(text="/undo", cursor_position=5), bypass_readonly=True)
+            event.app.exit(result=buff.text)
 
         @_kb.add("c-o", eager=True)
         def _(event: KeyPressEvent) -> None:
@@ -1978,6 +1993,7 @@ class CustomPromptSession:
         # Consume one-shot prefill text if set
         default = getattr(self, "_prefill_text", None) or ""
         self._prefill_text = None
+
         with patch_stdout(raw=True):
             command = str(
                 await self._session.prompt_async(placeholder=placeholder, default=default)
